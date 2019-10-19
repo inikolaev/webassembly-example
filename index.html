@@ -1,0 +1,136 @@
+<html>
+    <head>
+        <script src="src/js/script.js"></script>
+    </head>
+    <body>
+        <div>
+            <button onclick="toggle_mode(event)" style="width: 115px">WebAssembly: off</button>
+            <button onclick="filter('invert')">Invert</button>
+            <button onclick="filter('grayscale_averaging')">Grayscale 1</button>
+            <button onclick="filter('grayscale_luminance')">Grayscale 2</button>
+            <button onclick="filter('grayscale_desaturation')">Grayscale 3</button>
+            <button onclick="filter('grayscale_decomposition_min')">Grayscale 4</button>
+            <button onclick="filter('grayscale_decomposition_max')">Grayscale 5</button>
+            <button onclick="filter('grayscale_dithering')">Grayscale 6</button>
+            <button onclick="filter('gaussian_blur')">Gaussian Blur</button>
+        </div>
+        <canvas id="canvas"></canvas>
+    </body>
+    <script>
+        let mode = "js";
+        const canvas = document.getElementById("canvas");
+        const context = canvas.getContext("2d");
+
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.onload = () => {
+            const ratio = image.width / image.height;
+            canvas.width = image.width;
+            canvas.height = image.height;
+
+            context.drawImage(image, 0, 0, image.width, image.height,
+                                     0, 0, canvas.width, canvas.height);
+        }
+        image.src = "./image.jpeg";
+
+        function js_init() {
+            function applyFilter(filter) {
+                const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data;
+
+                const start = performance.now();
+                filter(data, canvas.width, canvas.height);
+                const end = performance.now();
+                console.log("Elapsed time for filter", filter.name, ":", end - start);
+
+                context.putImageData(imageData, 0, 0);
+            }
+
+            function createFilter(filter) {
+                return () => applyFilter(filter);
+            }
+
+            window.js_invert = createFilter(js_invert);
+            window.js_grayscale_averaging = createFilter(js_grayscale_averaging);
+            window.js_grayscale_luminance = createFilter(js_grayscale_luminance);
+            window.js_grayscale_desaturation = createFilter(js_grayscale_desaturation);
+            window.js_grayscale_decomposition_min = createFilter(js_grayscale_decomposition_min);
+            window.js_grayscale_decomposition_max = createFilter(js_grayscale_decomposition_max);
+            window.js_grayscale_dithering = createFilter(js_grayscale_dithering);
+            window.js_gaussian_blur = createFilter(js_gaussian_blur);
+        }
+
+        function wasm_init() {
+            const memory = new WebAssembly.Memory({initial: 256});
+            const importObject = {
+                env: {
+                    memory: memory,
+                    js_exp: Math.exp
+                }
+            };
+
+            fetch('src/c/filters.wasm')
+                .then(response => response.arrayBuffer())
+                .then(bytes => WebAssembly.compile(bytes))
+                .then(module => new WebAssembly.Instance(module, importObject))
+                .then(instance => instance.exports)
+                .then(instance => {
+                    const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imageData.data;
+
+                    function applyFilter(filter) {
+                        // unfortunatelly we have to copy whole image into WebAssembly memory
+                        // memory.buffer is an instance of ArrayBuffer which we can't modify directly,
+                        // but rather have to create a typed array to modify it
+                        const buffer = new Uint8Array(memory.buffer, 0, data.length);
+                        for (let i = 0; i < buffer.length; i++) {
+                            buffer[i] = data[i];
+                        }
+
+                        const start = performance.now();
+                        filter(0, canvas.width, canvas.height);
+                        const end = performance.now();
+                        console.log("Elapsed time for filter", filter.name, ":", end - start);
+
+                        for (let i = 0; i < buffer.length; i++) {
+                            data[i] = buffer[i];
+                        }
+
+                        context.putImageData(imageData, 0, 0);
+                    }
+
+                    function createFilter(filter) {
+                        return () => applyFilter(filter)
+                    }
+
+                    window.wasm_invert = createFilter(instance.wasm_invert);
+                    window.wasm_grayscale_averaging = createFilter(instance.wasm_grayscale_averaging);
+                    window.wasm_grayscale_luminance = createFilter(instance.wasm_grayscale_luminance);
+                    window.wasm_grayscale_desaturation = createFilter(instance.wasm_grayscale_desaturation);
+                    window.wasm_grayscale_decomposition_min = createFilter(instance.wasm_grayscale_decomposition_min);
+                    window.wasm_grayscale_decomposition_max = createFilter(instance.wasm_grayscale_decomposition_max);
+                    window.wasm_grayscale_dithering = createFilter(instance.wasm_grayscale_dithering);
+                    window.wasm_gaussian_blur = createFilter(instance.wasm_gaussian_blur);
+                });
+        }
+
+        function filter(name) {
+            if (typeof window[mode + "_" + name] === "function") {
+                window[mode + "_" + name]();
+            }
+        }
+
+        function toggle_mode(e) {
+            if (mode === "js") {
+                mode = "wasm";
+                e.target.textContent = "WebAssembly: on";
+            } else {
+                mode = "js";
+                e.target.textContent = "WebAssembly: off";
+            }
+        }
+
+        js_init();
+        wasm_init();
+    </script>
+</html>
